@@ -606,6 +606,7 @@
 
       .history-round { font-weight: 600; font-size: 11px; }
       .history-score { font-weight: 700; color: var(--success); font-size: 12px; }
+      .history-time { font-size: 10px; color: var(--muted); margin-top: 2px; }
 
       /* Mini Chart */
       .mini-chart {
@@ -1214,10 +1215,10 @@
             <label>API Settings</label>
             <input type="password" id="api-key" placeholder="Enter API Key..." style="margin-bottom:8px;" />
             <select id="model-select" style="width:100%;padding:6px 8px;font-size:11px;border:1px solid var(--line);border-radius:4px;margin-bottom:8px;">
-              <option value="MiniMax-M2.7">MiniMax-M2.7</option>
-              <option value="MiniMax-M2.7-highspeed">MiniMax-M2.7-highspeed</option>
-              <option value="MiniMax-M2.5">MiniMax-M2.5</option>
               <option value="MiniMax-M2.5-highspeed">MiniMax-M2.5-highspeed</option>
+              <option value="MiniMax-M2.7-highspeed">MiniMax-M2.7-highspeed</option>
+              <option value="MiniMax-M2.7">MiniMax-M2.7</option>
+              <option value="MiniMax-M2.5">MiniMax-M2.5</option>
               <option value="MiniMax-M2">MiniMax-M2</option>
             </select>
             <input type="text" id="api-endpoint" value="https://api.minimaxi.com/v1/text/chatcompletion_v2" placeholder="API Endpoint" style="font-size:11px;" />
@@ -1246,6 +1247,10 @@
       <aside class="panel right">
         <div class="panel-header">History</div>
         <div class="panel-body">
+          <div class="button-row" style="margin-bottom:12px">
+            <button class="btn btn-primary" id="save-history-btn" style="flex:1;margin-bottom:6px;">Save Loop</button>
+            <button class="btn" id="clear-history-btn" style="flex:1;margin-bottom:6px;">Clear</button>
+          </div>
           <div id="history-list">
             <div class="empty">No history</div>
           </div>
@@ -1265,6 +1270,7 @@
 
     <script>
       const STORAGE_KEY = "ai_push_evolution_v2";
+      const HISTORY_STORAGE_KEY = "ai_push_evolution_history_v1";
 
       const state = {
         basePrompt: "",
@@ -1281,19 +1287,26 @@
         ],
         runtime: {
           apiKey: "",
-          model: "MiniMax-M2.7",
+          model: "MiniMax-M2.5-highspeed",
           endpoint: "https://api.minimaxi.com/v1/text/chatcompletion_v2"
         },
         rounds: [],
         globalBest: null,
         currentRound: 0,
         viewingRoundNum: null,
-        logs: []
+        logs: [],
+        history: [],
+        activeHistoryId: null,
+        latestSnapshot: null
       };
 
       const $ = id => document.getElementById(id);
 
       function deepClone(obj) { return JSON.parse(JSON.stringify(obj)); }
+
+      function safeString(str) {
+        return JSON.stringify(str).slice(1, -1);
+      }
 
       function generateId() { return Math.random().toString(36).slice(2, 8); }
 
@@ -1347,6 +1360,99 @@
         } catch {
           state.rounds = [];
         }
+      }
+
+      function createSnapshot(source = "manual") {
+        return {
+          id: `loop-${Date.now()}`,
+          createdAt: new Date().toISOString(),
+          source,
+          input: {
+            basePrompt: state.basePrompt,
+            strategy: state.strategy,
+            params: deepClone(state.params)
+          },
+          runtime: {
+            model: state.runtime.model,
+            endpoint: state.runtime.endpoint
+          },
+          rounds: deepClone(state.rounds),
+          globalBest: deepClone(state.globalBest),
+          currentRound: state.currentRound
+        };
+      }
+
+      function saveHistoryToStorage() {
+        try {
+          localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(state.history));
+        } catch (e) {
+          log(`[Error] Failed to save history: ${e.message}`, "error");
+        }
+      }
+
+      function loadHistoryFromStorage() {
+        try {
+          const raw = localStorage.getItem(HISTORY_STORAGE_KEY);
+          state.history = raw ? JSON.parse(raw) : [];
+        } catch (_error) {
+          state.history = [];
+        }
+      }
+
+      function saveCurrentLoop() {
+        if (!state.latestSnapshot && state.rounds.length === 0) {
+          log("[System] No loop to save", "");
+          return;
+        }
+
+        const snapshot = createSnapshot("manual");
+        if (!state.latestSnapshot && state.rounds.length > 0) {
+          snapshot.rounds = deepClone(state.rounds);
+          snapshot.globalBest = deepClone(state.globalBest);
+          snapshot.currentRound = state.currentRound;
+        }
+
+        state.history = [snapshot, ...state.history].slice(0, 30);
+        state.activeHistoryId = snapshot.id;
+        saveHistoryToStorage();
+        renderHistory();
+        log("[System] Loop saved", "success");
+      }
+
+      function clearHistory() {
+        state.history = [];
+        state.activeHistoryId = null;
+        saveHistoryToStorage();
+        renderHistory();
+        log("[System] History cleared", "");
+      }
+
+      function applySnapshot(snapshot) {
+        state.activeHistoryId = snapshot.id;
+        state.basePrompt = snapshot.input.basePrompt || '';
+        state.strategy = snapshot.input.strategy || '';
+        state.params = deepClone(snapshot.input.params || {});
+        state.runtime.model = snapshot.runtime.model || state.runtime.model;
+        state.runtime.endpoint = snapshot.runtime.endpoint || state.runtime.endpoint;
+        state.rounds = deepClone(snapshot.rounds || []);
+        state.globalBest = deepClone(snapshot.globalBest);
+        state.currentRound = snapshot.currentRound || 0;
+        state.viewingRoundNum = null;
+
+        $("base-prompt").value = state.basePrompt;
+        $("strategy").value = state.strategy;
+        $("api-key").value = state.runtime.apiKey;
+        $("model-select").value = state.runtime.model;
+        $("api-endpoint").value = state.runtime.endpoint;
+        autoResizeTextarea($("base-prompt"));
+        autoResizeTextarea($("strategy"));
+        renderParamFields();
+        renderEvolutionBoard();
+        renderHistory();
+        updateMetrics();
+        saveState();
+
+        log(`[System] Restored loop from ${new Date(snapshot.createdAt).toLocaleString()}`, "");
       }
 
       async function callMiniMax(systemPrompt, userPrompt) {
@@ -1464,14 +1570,16 @@
 
           // Each prompt generates pushCount pushes
           for (let i = 0; i < state.pushCount; i++) {
-            const baseScore = 70 + Math.random() * 20;
-            const score = Math.round(baseScore * 10) / 10;
-            const metrics = {
-              "Clarity": Math.round(score * (0.9 + Math.random() * 0.2)),
-              "Tone": Math.round(score * (0.9 + Math.random() * 0.2)),
-              "CTR": Math.round(score * (0.9 + Math.random() * 0.2)),
-              "Compliance": Math.round(score * (0.9 + Math.random() * 0.2))
-            };
+            const clarity = Math.round(60 + Math.random() * 40);
+            const tone = Math.round(60 + Math.random() * 40);
+            const ctr = Math.round(60 + Math.random() * 40);
+            const compliance = Math.round(60 + Math.random() * 40);
+            const w0 = state.weights[0]?.value || 0.25;
+            const w1 = state.weights[1]?.value || 0.25;
+            const w2 = state.weights[2]?.value || 0.25;
+            const w3 = state.weights[3]?.value || 0.25;
+            const score = Math.round((clarity * w0 + tone * w1 + ctr * w2 + compliance * w3) * 10) / 10;
+            const metrics = { "Clarity": clarity, "Tone": tone, "CTR": ctr, "Compliance": compliance };
             pushes.push({
               id: `push-${generateId()}`,
               text: `${promptText} (${i + 1})`,
@@ -1514,12 +1622,12 @@
 
       async function runNextRound() {
         if (!state.runtime.apiKey) {
-          alert("请先填写 API Key");
+          alert("Please enter API Key first");
           return;
         }
 
         if (!state.basePrompt.trim()) {
-          alert("请先填写 Base Prompt");
+          alert("Please enter Base Prompt first");
           return;
         }
 
@@ -1538,17 +1646,17 @@
 
           log(`[Step 1] Generating 3 prompts × 3 pushes with scores...`, "");
 
-          const apiRequest = `[Pasted]输出 JSON，不要任何额外解释。
+const apiRequest = `[Pasted]Output JSON only, no additional explanations.
 
-结构：
+Structure:
 {
   "variants": [
     {
-      "prompt": "第一条 prompt 的完整内容",
+      "prompt": "Full content of the first prompt",
       "pushes": [
         {
-          "title": "标题1",
-          "body": "正文1",
+          "title": "Title 1",
+          "body": "Body 1",
           "score": {
             "Clarity": 0,
             "Tone": 0,
@@ -1558,47 +1666,46 @@
           }
         },
         {
-          "title": "标题2",
-          "body": "正文2",
+          "title": "Title 2",
+          "body": "Body 2",
           "score": { ... }
         },
         {
-          "title": "标题3",
-          "body": "正文3",
+          "title": "Title 3",
+          "body": "Body 3",
           "score": { ... }
         }
       ]
     },
     {
-      "prompt": "第二条 prompt 的完整内容",
+      "prompt": "Full content of the second prompt",
       "pushes": [ ... ]
     },
     {
-      "prompt": "第三条 prompt 的完整内容",
+      "prompt": "Full content of the third prompt",
       "pushes": [ ... ]
     }
   ]
 }
 
 Base Prompt:
-${state.basePrompt}
+${safeString(state.basePrompt)}
 
 Rewrite Rules:
-${state.strategy || "无"}
+${safeString(state.strategy || "none")}
 
-要求：
-1. 基于 Base Prompt 进行微调，生成3个不同的 prompt 变体
-2. 【重要】保留 Base Prompt 的全部内容，只在开头、中间或结尾添加少量规则和说明
-3. 【禁止】不要删除、替换或大幅修改 Base Prompt 的原有内容
-4. 【禁止】不要删除原有的占位符（如 {{userName}} 等），保持原样
-5. 每个 prompt 生成3个 push
-6. 对每个 push 进行评分（每个维度 1–100 分，整数）：
-   - Clarity: 信息清晰度（金额、动作、有效期是否一目了然）
-   - Tone: 语气是否自然、人性化、不公司腔
-   - CTR: 点击潜力（利益点 + 行动指令）
-   - Compliance: 合规性（无敏感词、无虚假、无违规）
-   - total = Clarity×${w0} + Tone×${w1} + CTR×${w2} + Compliance×${w3}
-7. 所有分数按上述规则计算后填入每个 push 的 score 对象。`;
+Requirements:
+1. Generate 3 different prompt variants based on Base Prompt with slight modifications
+2. 【Important】Keep all original Base Prompt content, only add a few rules/instructions at the beginning, middle, or end
+3. 【Forbidden】Do NOT delete, replace, or significantly modify the original Base Prompt content
+4. 【Forbidden】Do NOT delete existing placeholders (such as {{userName}}, etc.), keep them as-is
+5. Generate 3 pushes for each prompt
+6. Score each push (each dimension 1-100, integer):
+   - Clarity: Information clarity (is amount, action, expiration date clear at a glance)
+   - Tone: Natural, humanized tone, not robotic or corporate-sounding
+   - CTR: Click potential (benefits + call to action)
+   - Compliance: Compliance (no sensitive words, no false claims, no violations)
+7. Calculate all scores using the formula below and fill into each push's score object.`;
 
           const apiResponse = await callMiniMax(
             "You are an AI Push optimization assistant. Return ONLY valid JSON with no additional text.",
@@ -1627,19 +1734,25 @@ ${state.strategy || "无"}
           log(`[Step 1] Generated ${variants.length} variants`, "success");
 
           const promptsWithPushes = variants.slice(0, 3).map((variant, pi) => {
-            const pushes = (variant.pushes || []).slice(0, 3).map((p, i) => ({
-              id: `push-${generateId()}`,
-              text: `${p.title || ''} ${p.body || ''}`.trim(),
-              title: p.title || '',
-              body: p.body || '',
-              score: typeof p.score?.total === 'number' ? p.score.total : 0,
-              metrics: {
-                "Clarity": p.score?.Clarity || 0,
-                "Tone": p.score?.Tone || 0,
-                "CTR": p.score?.CTR || 0,
-                "Compliance": p.score?.Compliance || 0
-              }
-            }));
+            const w0 = state.weights[0]?.value || 0.25;
+            const w1 = state.weights[1]?.value || 0.25;
+            const w2 = state.weights[2]?.value || 0.25;
+            const w3 = state.weights[3]?.value || 0.25;
+            const pushes = (variant.pushes || []).slice(0, 3).map((p, i) => {
+              const clarity = p.score?.Clarity || 0;
+              const tone = p.score?.Tone || 0;
+              const ctr = p.score?.CTR || 0;
+              const compliance = p.score?.Compliance || 0;
+              const total = Math.round((clarity * w0 + tone * w1 + ctr * w2 + compliance * w3) * 10) / 10;
+              return {
+                id: `push-${generateId()}`,
+                text: `${p.title || ''} ${p.body || ''}`.trim(),
+                title: p.title || '',
+                body: p.body || '',
+                score: total,
+                metrics: { "Clarity": clarity, "Tone": tone, "CTR": ctr, "Compliance": compliance }
+              };
+            });
 
             pushes.sort((a, b) => b.score - a.score);
 
@@ -1669,9 +1782,11 @@ ${state.strategy || "无"}
 
           state.rounds.push(newRound);
 
+          state.latestSnapshot = createSnapshot("live");
+
           // Show selection UI
           renderEvolutionBoard();
-          $("status").textContent = `Round ${state.currentRound}: 请选择最佳 Push`;
+          $("status").textContent = `Round ${state.currentRound}: Please select the best Push`;
 
           log(`[System] Please select the best push from the 3 options above`, "");
 
@@ -1717,6 +1832,8 @@ ${state.strategy || "无"}
         state.globalBest = null;
         state.viewingRoundNum = null;
         state.logs = [];
+        state.latestSnapshot = null;
+        state.activeHistoryId = null;
         log("[System] Reset complete", "");
         renderEvolutionBoard();
         renderHistory();
@@ -1731,19 +1848,21 @@ ${state.strategy || "无"}
       }
 
       function renderHistory() {
-        if (!state.rounds.length) {
-          $("history-list").innerHTML = '<div class="empty">No history</div>';
+        if (!state.history.length) {
+          $("history-list").innerHTML = '<div class="empty">No saved loops</div>';
           return;
         }
 
-        const bestScore = Math.max(...state.rounds.map(r => r.bestPush?.score || 0));
-
-        $("history-list").innerHTML = [...state.rounds].reverse().map(r => {
-          const isBest = (r.bestPush?.score || 0) === bestScore;
+        $("history-list").innerHTML = state.history.map(item => {
+          const date = new Date(item.createdAt);
+          const timeStr = date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+          const isActive = state.activeHistoryId === item.id;
+          const bestScore = item.globalBest?.score || item.rounds?.[item.rounds.length - 1]?.bestPush?.score;
           return `
-            <button class="history-item ${isBest ? 'best' : ''}" onclick="restoreRound(${r.roundNum})">
-              <span class="history-round">Round ${r.roundNum}${isBest ? ' ★' : ''}</span>
-              <span class="history-score">${r.bestPush?.score?.toFixed(2) || 'N/A'}</span>
+            <button class="history-item ${isActive ? 'active' : ''}" onclick="applySnapshot(state.history.find(h => h.id === '${item.id}'))">
+              <span class="history-round">${item.source === 'live' ? 'Live' : 'Demo'} Loop ${item.currentRound || item.rounds?.length || 0} rounds</span>
+              <span class="history-score">${bestScore ? bestScore.toFixed(2) : 'N/A'}</span>
+              <span class="history-time">${timeStr}</span>
             </button>
           `;
         }).join("");
@@ -1793,17 +1912,28 @@ ${state.strategy || "无"}
           return;
         }
 
+        const isViewingHistory = state.activeHistoryId !== null;
+        const roundsToShow = isViewingHistory ? state.rounds : [state.rounds[state.rounds.length - 1]];
+
         let html = '<div class="round-list">';
 
-        const displayRound = state.viewingRoundNum
-          ? state.rounds.find(r => r.roundNum === state.viewingRoundNum) || state.rounds[state.rounds.length - 1]
-          : state.rounds[state.rounds.length - 1];
+        if (isViewingHistory) {
+          html += `
+            <div class="round-section" style="border: 2px solid var(--accent); margin-bottom: 16px;">
+              <div class="round-section-header" style="background: var(--accent-light);">
+                <span class="round-title" style="color: var(--accent);">Viewing History Snapshot</span>
+                <button class="optimize-btn" style="background: var(--accent); color: #fff; border-color: var(--accent);" onclick="returnToCurrent()">Return to Current</button>
+              </div>
+            </div>
+          `;
+        }
 
-        html += `<div class="round-section">`;
-        html += `<div class="round-section-header">`;
-        html += `<span class="round-title">Round ${displayRound.roundNum}${state.viewingRoundNum ? ' (viewing)' : ''}</span>`;
-        html += `<span class="round-best">Best: ${displayRound.bestPush?.score?.toFixed(2) || 'N/A'}</span>`;
-        html += `</div>`;
+        roundsToShow.forEach((displayRound) => {
+          html += `<div class="round-section">`;
+          html += `<div class="round-section-header">`;
+          html += `<span class="round-title">Round ${displayRound.roundNum}${state.viewingRoundNum ? ' (viewing)' : ''}</span>`;
+          html += `<span class="round-best">Best: ${displayRound.bestPush?.score?.toFixed(2) || 'N/A'}</span>`;
+          html += `</div>`;
 
         displayRound.prompts.forEach((prompt, pi) => {
           const isTop = displayRound.topKPrompts && displayRound.topKPrompts.some(p => p.id === prompt.id);
@@ -1860,10 +1990,19 @@ ${state.strategy || "无"}
         });
 
         html += `</div>`;
+        });
 
         html += '</div>';
 
         $("evolution-board").innerHTML = html;
+      }
+
+      function returnToCurrent() {
+        state.activeHistoryId = null;
+        state.viewingRoundNum = null;
+        renderEvolutionBoard();
+        renderHistory();
+        log("[System] Returned to current state", "");
       }
 
       function togglePromptTree(el) {
@@ -1976,6 +2115,8 @@ ${state.strategy || "无"}
       // Event Listeners
       $("run-round-btn").addEventListener("click", runNextRound);
       $("reset-btn").addEventListener("click", resetAll);
+      $("save-history-btn").addEventListener("click", saveCurrentLoop);
+      $("clear-history-btn").addEventListener("click", clearHistory);
 
       function autoResizeTextarea(el) {
         el.style.height = 'auto';
@@ -2039,6 +2180,7 @@ ${state.strategy || "无"}
       // Init
       setLeftPanelWidth(getLeftPanelWidth());
       loadState();
+      loadHistoryFromStorage();
       state.basePrompt = $("base-prompt").value;
       state.strategy = $("strategy").value;
       renderParamFields();
