@@ -1156,6 +1156,7 @@
         .timeline-connector { display: none; }
       }
     </style>
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
   </head>
   <body>
     <div class="app">
@@ -1239,6 +1240,8 @@
         </div>
       </aside>
 
+      <div class="panel-resizer" id="panel-resizer"></div>
+
       <!-- CENTER PANEL: Evolution Board -->
       <main class="panel main-panel">
         <div class="panel-header">Evolution Board <span id="round-count" style="font-weight:normal;margin-left:8px;"></span></div>
@@ -1247,26 +1250,21 @@
         </div>
       </main>
 
-      <!-- RIGHT PANEL: History & Data -->
+      <!-- RIGHT PANEL -->
       <aside class="panel right">
-        <div class="panel-header">History</div>
         <div class="panel-body">
-          <div class="history-section">
-            <button class="btn btn-primary" id="view-history-btn" style="width:100%;margin-bottom:8px;">View History</button>
-            <div id="history-list"></div>
+          <div class="button-row" style="margin-bottom:8px">
+            <button class="btn btn-primary" id="export-btn" style="flex:1;">Export Excel</button>
           </div>
-        </div>
-        <div class="panel-header" style="border-top:1px solid var(--line);">Data</div>
-        <div class="panel-body">
-          <div class="data-section">
-            <div class="button-row" style="margin-bottom:8px">
-              <button class="btn btn-primary" id="export-btn" style="flex:1;">Export CSV</button>
-            </div>
-            <div class="button-row">
-              <button class="btn" id="import-btn" style="flex:1;">Import CSV</button>
-            </div>
-            <input type="file" id="import-file" accept=".csv" style="display:none" />
+          <div class="button-row" style="margin-bottom:8px">
+            <button class="btn" id="import-btn" style="flex:1;">Import Excel</button>
           </div>
+          <div class="button-row" style="margin-bottom:12px">
+            <button class="btn" id="clear-all-btn" style="flex:1;background:#d73a49;color:#fff;border-color:#d73a49;">Clear All</button>
+          </div>
+          <input type="file" id="import-file" accept=".xlsx,.xls" style="display:none" />
+          <div class="panel-header" style="border-top:1px solid var(--line);">History</div>
+          <div id="history-list"></div>
         </div>
       </aside>
     </div>
@@ -1365,6 +1363,26 @@
             state.currentRound = saved.currentRound || 0;
             state.globalBest = saved.globalBest || null;
             state.viewingRoundNum = saved.viewingRoundNum || null;
+
+            if (state.rounds.length > 0) {
+              state.latestSnapshot = {
+                id: `loop-${Date.now()}`,
+                createdAt: new Date().toISOString(),
+                source: 'loaded',
+                input: {
+                  basePrompt: state.basePrompt,
+                  strategy: state.strategy,
+                  params: deepClone(state.params)
+                },
+                runtime: {
+                  model: state.runtime.model,
+                  endpoint: state.runtime.endpoint
+                },
+                rounds: deepClone(state.rounds),
+                globalBest: deepClone(state.globalBest),
+                currentRound: state.currentRound
+              };
+            }
 
             $("base-prompt").value = state.basePrompt;
             $("strategy").value = state.strategy;
@@ -1478,73 +1496,62 @@
           });
         });
 
-        const csvContent = rows.map(row => row.map(cell => {
-          const str = String(cell);
-          if (str.includes(',') || str.includes('"') || str.includes('\n')) {
-            return '"' + str.replace(/"/g, '""') + '"';
-          }
-          return str;
-        }).join(',')).join('\n');
-
-        const BOM = '\uFEFF';
-        const blob = new Blob([BOM + csvContent], { type: 'text/csv;charset=utf-8' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `ai-push-export-${Date.now()}.csv`;
-        a.click();
-        URL.revokeObjectURL(url);
-        log("[System] Exported to CSV", "success");
+        const ws = XLSX.utils.aoa_to_sheet(rows);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "Push Data");
+        XLSX.writeFile(wb, `ai-push-export-${Date.now()}.xlsx`);
+        log("[System] Exported to Excel", "success");
       }
 
       function importFromExcel(file) {
         const reader = new FileReader();
         reader.onload = function(e) {
           try {
-            const text = e.target.result;
-            const lines = text.split('\n').filter(line => line.trim());
-            if (lines.length < 2) {
+            const data = new Uint8Array(e.target.result);
+            const workbook = XLSX.read(data, { type: 'array' });
+            const sheetName = workbook.SheetNames[0];
+            const sheet = workbook.Sheets[sheetName];
+            const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+
+            if (rows.length < 2) {
               log("[System] Invalid file format", "error");
               return;
             }
 
-            const header = lines[0].split(',').map(h => h.replace(/"/g, '').trim());
+            const header = rows[0].map(h => String(h).trim());
             const roundsMap = {};
+            let currentRoundNum = null;
+            let currentPromptIdx = null;
 
-            for (let i = 1; i < lines.length; i++) {
-              const values = [];
-              let inQuotes = false;
-              let current = '';
-              for (const char of lines[i]) {
-                if (char === '"') {
-                  inQuotes = !inQuotes;
-                } else if (char === ',' && !inQuotes) {
-                  values.push(current.replace(/""/g, '"').trim());
-                  current = '';
-                } else {
-                  current += char;
-                }
-              }
-              values.push(current.replace(/""/g, '"').trim());
-
+            for (let i = 1; i < rows.length; i++) {
+              const values = rows[i];
               const row = {};
               header.forEach((h, idx) => row[h] = values[idx] || '');
 
-              const roundNum = parseInt(row['Round']) || 0;
-              if (!roundsMap[roundNum]) {
-                roundsMap[roundNum] = { roundNum, prompts: [] };
+              if (row['Round'] !== undefined && row['Round'] !== '') {
+                currentRoundNum = parseInt(row['Round']) || 0;
+              }
+              if (row['Prompt #'] !== undefined && row['Prompt #'] !== '') {
+                currentPromptIdx = parseInt(row['Prompt #']) - 1 || 0;
               }
 
-              const promptIdx = parseInt(row['Prompt #']) - 1 || 0;
-              while (roundsMap[roundNum].prompts.length <= promptIdx) {
-                roundsMap[roundNum].prompts.push({
+              if (currentRoundNum === null || currentPromptIdx === null) continue;
+
+              if (!roundsMap[currentRoundNum]) {
+                roundsMap[currentRoundNum] = { roundNum: currentRoundNum, prompts: [] };
+              }
+
+              while (roundsMap[currentRoundNum].prompts.length <= currentPromptIdx) {
+                roundsMap[currentRoundNum].prompts.push({
                   id: `prompt-${generateId()}`,
                   text: '',
                   pushes: []
                 });
               }
-              if (roundsMap[roundNum].prompts[promptIdx].text === '' && row['Prompt Text']) {
-                roundsMap[roundNum].prompts[promptIdx].text = row['Prompt Text'] || '';
+
+              const prompt = roundsMap[currentRoundNum].prompts[currentPromptIdx];
+              if (prompt.text === '' && row['Prompt Text']) {
+                prompt.text = row['Prompt Text'] || '';
               }
 
               const push = {
@@ -1560,7 +1567,7 @@
                   Compliance: parseInt(row['Compliance']) || 0
                 }
               };
-              roundsMap[roundNum].prompts[promptIdx].pushes.push(push);
+              prompt.pushes.push(push);
             }
 
             const importedRounds = Object.values(roundsMap).sort((a, b) => a.roundNum - b.roundNum);
@@ -1591,7 +1598,7 @@
             log(`[System] Import failed: ${err.message}`, "error");
           }
         };
-        reader.readAsText(file);
+        reader.readAsArrayBuffer(file);
       }
 
       function applySnapshot(snapshot) {
@@ -2016,94 +2023,78 @@ Requirements:
         $("status").textContent = "Reset. Click Run Next Round.";
       }
 
+      function clearAll() {
+        localStorage.removeItem(STORAGE_KEY);
+        localStorage.removeItem(HISTORY_STORAGE_KEY);
+        state.rounds = [];
+        state.currentRound = 0;
+        state.globalBest = null;
+        state.viewingRoundNum = null;
+        state.logs = [];
+        state.latestSnapshot = null;
+        state.activeHistoryId = null;
+        state.history = [];
+        state.isViewingHistory = false;
+        state.viewingSnapshotId = null;
+        state.basePrompt = '';
+        state.strategy = '';
+        state.params = {};
+        state.weights = [
+          { name: "Clarity", value: 0.25 },
+          { name: "Tone", value: 0.25 },
+          { name: "CTR", value: 0.25 },
+          { name: "Compliance", value: 0.25 }
+        ];
+
+        $("base-prompt").value = '';
+        $("strategy").value = '';
+        $("api-key").value = '';
+        autoResizeTextarea($("base-prompt"));
+        autoResizeTextarea($("strategy"));
+        renderParamFields();
+        renderEvolutionBoard();
+        renderHistory();
+        updateMetrics();
+        $("status").textContent = "Click Run Next Round.";
+        log("[System] Cleared all data", "");
+      }
+
       function updateMetrics() {
         $("round-count").textContent = state.rounds.length ? `(${state.rounds.length} rounds)` : "";
         renderHistory();
       }
 
       function renderHistory() {
-        if (!state.isViewingHistory) {
+        if (!state.rounds.length) {
           $("history-list").innerHTML = '';
           return;
         }
 
-        if (!state.history.length) {
-          $("history-list").innerHTML = '';
-          return;
-        }
-
-        $("history-list").innerHTML = state.history.map(item => {
-          const date = new Date(item.createdAt);
-          const timeStr = date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-          const isActive = state.viewingSnapshotId === item.id;
-          const bestScore = item.globalBest?.score || item.rounds?.[item.rounds.length - 1]?.bestPush?.score;
+        $("history-list").innerHTML = state.rounds.map(round => {
+          const isActive = state.viewingRoundNum === round.roundNum;
           return `
-            <button class="history-item ${isActive ? 'active' : ''}" onclick="loadSnapshotForViewing('${item.id}')">
-              <span class="history-round">${item.source === 'live' ? 'Live' : 'Demo'} Loop ${item.currentRound || item.rounds?.length || 0} rounds</span>
-              <span class="history-score">${bestScore ? bestScore.toFixed(2) : 'N/A'}</span>
-              <span class="history-time">${timeStr}</span>
+            <button class="history-item ${isActive ? 'active' : ''}" onclick="viewRound(${round.roundNum})">
+              <span class="history-round">Round ${round.roundNum}</span>
+              <span class="history-score">${round.bestPush?.score?.toFixed(2) || 'N/A'}</span>
             </button>
           `;
         }).join("");
       }
 
-      function viewHistory() {
+      function viewRound(roundNum) {
+        state.viewingRoundNum = roundNum;
         state.isViewingHistory = true;
-        state.viewingSnapshotId = null;
         renderHistory();
         renderEvolutionBoard();
-        $("view-history-btn").textContent = "Back to Current";
-        log("[System] Viewing history", "");
+        log(`[System] Viewing Round ${roundNum}`, "");
       }
 
       function exitHistoryView() {
         state.isViewingHistory = false;
-        state.viewingSnapshotId = null;
+        state.viewingRoundNum = null;
         renderHistory();
         renderEvolutionBoard();
-        $("view-history-btn").textContent = "View History";
-        log("[System] Exited history view", "");
-      }
-
-      function loadSnapshotForViewing(snapshotId) {
-        const snapshot = state.history.find(h => h.id === snapshotId);
-        if (!snapshot) return;
-
-        state.viewingSnapshotId = snapshotId;
-        state.rounds = deepClone(snapshot.rounds || []);
-        state.currentRound = snapshot.currentRound || 0;
-        state.globalBest = deepClone(snapshot.globalBest);
-        state.basePrompt = snapshot.input?.basePrompt || '';
-        state.strategy = snapshot.input?.strategy || '';
-        state.params = deepClone(snapshot.input?.params || {});
-        state.runtime.model = snapshot.runtime?.model || state.runtime.model;
-        state.runtime.endpoint = snapshot.runtime?.endpoint || state.runtime.endpoint;
-
-        $("base-prompt").value = state.basePrompt;
-        $("strategy").value = state.strategy;
-        autoResizeTextarea($("base-prompt"));
-        autoResizeTextarea($("strategy"));
-        renderParamFields();
-        renderHistory();
-        renderEvolutionBoard();
-        log(`[System] Viewing saved loop from ${new Date(snapshot.createdAt).toLocaleString()}`, "");
-      }
-
-      function restoreRound(roundNum) {
-        const round = state.rounds.find(r => r.roundNum === roundNum);
-        if (!round || !round.bestPrompt) return;
-
-        state.basePrompt = round.bestPrompt.text;
-        state.viewingRoundNum = roundNum;
-        $("base-prompt").value = state.basePrompt;
-        autoResizeTextarea($("base-prompt"));
-        renderParamFields();
-        renderEvolutionBoard();
-        renderHistory();
-        saveState();
-
-        log(`[System] Viewing Round ${roundNum}: "${round.bestPrompt.text.slice(0, 40)}..."`, "");
-        $("status").textContent = `Viewing Round ${roundNum}`;
+        log("[System] Returned to current state", "");
       }
 
       function toggleRound(roundNum) {
@@ -2128,12 +2119,20 @@ Requirements:
       }
 
       function renderEvolutionBoard() {
-        if (!state.rounds.length && !state.isViewingHistory) {
+        if (!state.rounds.length) {
           $("evolution-board").innerHTML = '<div class="empty">No runs yet. Click "Run Next Round" on the left to start.</div>';
           return;
         }
 
-        const roundsToShow = state.isViewingHistory ? state.rounds : [state.rounds[state.rounds.length - 1]];
+        let roundsToShow;
+        if (state.isViewingHistory && state.viewingRoundNum !== null) {
+          const round = state.rounds.find(r => r.roundNum === state.viewingRoundNum);
+          roundsToShow = round ? [round] : [state.rounds[state.rounds.length - 1]];
+        } else if (state.isViewingHistory) {
+          roundsToShow = state.rounds;
+        } else {
+          roundsToShow = [state.rounds[state.rounds.length - 1]];
+        }
 
         let html = '<div class="round-list">';
 
@@ -2149,7 +2148,7 @@ Requirements:
         }
 
         roundsToShow.forEach((displayRound, roundIndex) => {
-          const isCurrentRound = roundIndex === roundsToShow.length - 1 && !state.isViewingHistory;
+          const isCurrentRound = displayRound.roundNum === state.rounds.length && !state.isViewingHistory;
           html += `<div class="round-section">`;
           html += `<div class="round-section-header">`;
           html += `<span class="round-title">Round ${displayRound.roundNum}${isCurrentRound ? ' (Current)' : ''}</span>`;
@@ -2171,7 +2170,7 @@ Requirements:
                 <span class="prompt-tree-toggle">${isExpanded ? '▼' : '▶'}</span>
                 <span class="prompt-tree-name">Prompt #${pi + 1}</span>
                 <span class="prompt-tree-score">${bestPush?.score?.toFixed(2) || 'N/A'}</span>
-                <button class="optimize-btn" onclick="event.stopPropagation(); showPromptContent(${pi})" style="margin-left:auto;margin-right:4px;">View Full</button>
+                <button class="optimize-btn" onclick="event.stopPropagation(); showPromptContent(${displayRound.roundNum}, ${pi})" style="margin-left:auto;margin-right:4px;">View Full</button>
                 ${!state.isViewingHistory ? `<button class="optimize-btn" style="background:#d73a49;color:#fff;border-color:#d73a49;" onclick="event.stopPropagation(); selectPush(${pi}, '${bestPush?.id}')">Best</button>` : ''}
               </div>
               <div class="prompt-tree-content" style="display: ${isExpanded ? 'block' : 'none'}">
@@ -2225,28 +2224,20 @@ Requirements:
         if (!round || !round.bestPrompt) return;
 
         state.basePrompt = round.bestPrompt.text;
-        state.viewingRoundNum = roundNum;
+        state.viewingRoundNum = null;
         state.isViewingHistory = false;
         state.viewingSnapshotId = null;
+        state.currentRound = roundNum;
 
         $("base-prompt").value = state.basePrompt;
         autoResizeTextarea($("base-prompt"));
         renderParamFields();
         renderEvolutionBoard();
         renderHistory();
-        $("view-history-btn").textContent = "View History";
         saveState();
 
         log(`[System] Restored to Round ${roundNum}: "${round.bestPrompt.text.slice(0, 40)}..."`, "");
         $("status").textContent = `Restored to Round ${roundNum}`;
-      }
-
-      function returnToCurrent() {
-        state.activeHistoryId = null;
-        state.viewingRoundNum = null;
-        renderEvolutionBoard();
-        renderHistory();
-        log("[System] Returned to current state", "");
       }
 
       function togglePromptTree(el) {
@@ -2298,8 +2289,8 @@ Requirements:
         showPushDetail(push.id, title, text, push.score, push.metrics);
       }
 
-      function showPromptContent(promptIndex) {
-        const round = state.rounds[state.rounds.length - 1];
+      function showPromptContent(roundNum, promptIndex) {
+        const round = state.rounds.find(r => r.roundNum === roundNum);
         if (!round || !round.prompts) return;
         const prompt = round.prompts[promptIndex];
         if (!prompt) return;
@@ -2311,7 +2302,7 @@ Requirements:
         const content = $("push-modal-content");
         const escapedText = escapeHtml(text).replace(/\n/g, '<br>');
         content.innerHTML = `
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;position:sticky;top:0;background:#fff;padding:4px 0;">
             <span style="font-weight:600;">Prompt Detail</span>
             <span style="cursor:pointer;font-size:18px;color:var(--muted);" onclick="hidePushDetail()">×</span>
           </div>
@@ -2328,7 +2319,7 @@ Requirements:
           `<div class="modal-metric"><span>${k}</span><span>${typeof v === 'number' ? v : v}</span></div>`
         ).join("");
         content.innerHTML = `
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;position:sticky;top:0;background:#fff;padding:4px 0;">
             <span style="font-weight:600;">Push Detail</span>
             <span style="cursor:pointer;font-size:18px;color:var(--muted);" onclick="hidePushDetail()">×</span>
           </div>
@@ -2359,13 +2350,6 @@ Requirements:
       // Event Listeners
       $("run-round-btn").addEventListener("click", runNextRound);
       $("reset-btn").addEventListener("click", resetAll);
-      $("view-history-btn").addEventListener("click", () => {
-        if (state.isViewingHistory) {
-          exitHistoryView();
-        } else {
-          viewHistory();
-        }
-      });
       $("export-btn").addEventListener("click", exportToExcel);
       $("import-btn").addEventListener("click", () => $("import-file").click());
       $("import-file").addEventListener("change", e => {
@@ -2374,6 +2358,7 @@ Requirements:
           e.target.value = '';
         }
       });
+      $("clear-all-btn").addEventListener("click", clearAll);
 
       function autoResizeTextarea(el) {
         el.style.height = 'auto';
