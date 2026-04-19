@@ -608,6 +608,10 @@
       .history-score { font-weight: 700; color: var(--success); font-size: 12px; }
       .history-time { font-size: 10px; color: var(--muted); margin-top: 2px; }
 
+      .history-section { margin-bottom: 12px; }
+
+      .data-section { padding-top: 4px; }
+
       /* Mini Chart */
       .mini-chart {
         display: flex;
@@ -1243,16 +1247,25 @@
         </div>
       </main>
 
-      <!-- RIGHT PANEL: History -->
+      <!-- RIGHT PANEL: History & Data -->
       <aside class="panel right">
         <div class="panel-header">History</div>
         <div class="panel-body">
-          <div class="button-row" style="margin-bottom:12px">
-            <button class="btn btn-primary" id="save-history-btn" style="flex:1;margin-bottom:6px;">Save Loop</button>
-            <button class="btn" id="clear-history-btn" style="flex:1;margin-bottom:6px;">Clear</button>
+          <div class="history-section">
+            <button class="btn btn-primary" id="view-history-btn" style="width:100%;margin-bottom:8px;">View History</button>
+            <div id="history-list"></div>
           </div>
-          <div id="history-list">
-            <div class="empty">No history</div>
+        </div>
+        <div class="panel-header" style="border-top:1px solid var(--line);">Data</div>
+        <div class="panel-body">
+          <div class="data-section">
+            <div class="button-row" style="margin-bottom:8px">
+              <button class="btn btn-primary" id="export-btn" style="flex:1;">Export CSV</button>
+            </div>
+            <div class="button-row">
+              <button class="btn" id="import-btn" style="flex:1;">Import CSV</button>
+            </div>
+            <input type="file" id="import-file" accept=".csv" style="display:none" />
           </div>
         </div>
       </aside>
@@ -1297,7 +1310,9 @@
         logs: [],
         history: [],
         activeHistoryId: null,
-        latestSnapshot: null
+        latestSnapshot: null,
+        isViewingHistory: false,
+        viewingSnapshotId: null
       };
 
       const $ = id => document.getElementById(id);
@@ -1425,6 +1440,158 @@
         saveHistoryToStorage();
         renderHistory();
         log("[System] History cleared", "");
+      }
+
+      function exportToExcel() {
+        if (!state.rounds.length) {
+          log("[System] No rounds to export", "error");
+          return;
+        }
+
+        const rows = [["Round", "Prompt #", "Prompt Text", "Push #", "Title", "Body", "Score", "Clarity", "Tone", "CTR", "Compliance"]];
+
+        let lastRoundNum = null;
+        let lastPromptIdx = null;
+
+        state.rounds.forEach(round => {
+          round.prompts.forEach((prompt, pi) => {
+            prompt.pushes.forEach((push, pushi) => {
+              const roundCell = round.roundNum === lastRoundNum ? '' : round.roundNum;
+              const promptCell = (round.roundNum === lastRoundNum && pi === lastPromptIdx) ? '' : (pi + 1);
+              lastRoundNum = round.roundNum;
+              lastPromptIdx = pi;
+
+              rows.push([
+                roundCell,
+                promptCell,
+                (prompt.text || '').replace(/\n/g, ' '),
+                pushi + 1,
+                push.title || '',
+                (push.body || push.text || '').replace(/\n/g, ' '),
+                push.score || 0,
+                push.metrics?.Clarity || 0,
+                push.metrics?.Tone || 0,
+                push.metrics?.CTR || 0,
+                push.metrics?.Compliance || 0
+              ]);
+            });
+          });
+        });
+
+        const csvContent = rows.map(row => row.map(cell => {
+          const str = String(cell);
+          if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+            return '"' + str.replace(/"/g, '""') + '"';
+          }
+          return str;
+        }).join(',')).join('\n');
+
+        const BOM = '\uFEFF';
+        const blob = new Blob([BOM + csvContent], { type: 'text/csv;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `ai-push-export-${Date.now()}.csv`;
+        a.click();
+        URL.revokeObjectURL(url);
+        log("[System] Exported to CSV", "success");
+      }
+
+      function importFromExcel(file) {
+        const reader = new FileReader();
+        reader.onload = function(e) {
+          try {
+            const text = e.target.result;
+            const lines = text.split('\n').filter(line => line.trim());
+            if (lines.length < 2) {
+              log("[System] Invalid file format", "error");
+              return;
+            }
+
+            const header = lines[0].split(',').map(h => h.replace(/"/g, '').trim());
+            const roundsMap = {};
+
+            for (let i = 1; i < lines.length; i++) {
+              const values = [];
+              let inQuotes = false;
+              let current = '';
+              for (const char of lines[i]) {
+                if (char === '"') {
+                  inQuotes = !inQuotes;
+                } else if (char === ',' && !inQuotes) {
+                  values.push(current.replace(/""/g, '"').trim());
+                  current = '';
+                } else {
+                  current += char;
+                }
+              }
+              values.push(current.replace(/""/g, '"').trim());
+
+              const row = {};
+              header.forEach((h, idx) => row[h] = values[idx] || '');
+
+              const roundNum = parseInt(row['Round']) || 0;
+              if (!roundsMap[roundNum]) {
+                roundsMap[roundNum] = { roundNum, prompts: [] };
+              }
+
+              const promptIdx = parseInt(row['Prompt #']) - 1 || 0;
+              while (roundsMap[roundNum].prompts.length <= promptIdx) {
+                roundsMap[roundNum].prompts.push({
+                  id: `prompt-${generateId()}`,
+                  text: '',
+                  pushes: []
+                });
+              }
+              if (roundsMap[roundNum].prompts[promptIdx].text === '' && row['Prompt Text']) {
+                roundsMap[roundNum].prompts[promptIdx].text = row['Prompt Text'] || '';
+              }
+
+              const push = {
+                id: `push-${generateId()}`,
+                title: row['Title'] || '',
+                body: row['Body'] || '',
+                text: row['Body'] || '',
+                score: parseFloat(row['Score']) || 0,
+                metrics: {
+                  Clarity: parseInt(row['Clarity']) || 0,
+                  Tone: parseInt(row['Tone']) || 0,
+                  CTR: parseInt(row['CTR']) || 0,
+                  Compliance: parseInt(row['Compliance']) || 0
+                }
+              };
+              roundsMap[roundNum].prompts[promptIdx].pushes.push(push);
+            }
+
+            const importedRounds = Object.values(roundsMap).sort((a, b) => a.roundNum - b.roundNum);
+            importedRounds.forEach(round => {
+              round.prompts.forEach(prompt => {
+                prompt.pushes.sort((a, b) => b.score - a.score);
+                prompt.bestPush = prompt.pushes[0];
+                prompt.score = prompt.bestPush?.score || 0;
+              });
+              round.prompts.sort((a, b) => b.score - a.score);
+              round.topKPrompts = round.prompts;
+              round.bestPrompt = round.prompts[0];
+              round.bestPush = round.bestPrompt?.bestPush || null;
+            });
+
+            state.rounds = importedRounds;
+            state.currentRound = importedRounds.length;
+            state.globalBest = importedRounds[importedRounds.length - 1]?.bestPush || null;
+            state.activeHistoryId = null;
+            state.viewingRoundNum = null;
+
+            renderEvolutionBoard();
+            renderHistory();
+            updateMetrics();
+            saveState();
+            log(`[System] Imported ${importedRounds.length} rounds`, "success");
+          } catch (err) {
+            log(`[System] Import failed: ${err.message}`, "error");
+          }
+        };
+        reader.readAsText(file);
       }
 
       function applySnapshot(snapshot) {
@@ -1812,6 +1979,13 @@ Requirements:
         state.globalBest = { ...selectedPush, round: state.currentRound };
         state.viewingRoundNum = null;
 
+        const newParams = extractParams(selectedPrompt.text);
+        const oldParams = { ...state.params };
+        state.params = {};
+        newParams.forEach(p => {
+          state.params[p] = oldParams.hasOwnProperty(p) ? oldParams[p] : "";
+        });
+
         $("base-prompt").value = selectedPrompt.text;
         state.basePrompt = selectedPrompt.text;
         autoResizeTextarea($("base-prompt"));
@@ -1848,24 +2022,71 @@ Requirements:
       }
 
       function renderHistory() {
+        if (!state.isViewingHistory) {
+          $("history-list").innerHTML = '';
+          return;
+        }
+
         if (!state.history.length) {
-          $("history-list").innerHTML = '<div class="empty">No saved loops</div>';
+          $("history-list").innerHTML = '';
           return;
         }
 
         $("history-list").innerHTML = state.history.map(item => {
           const date = new Date(item.createdAt);
           const timeStr = date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-          const isActive = state.activeHistoryId === item.id;
+          const isActive = state.viewingSnapshotId === item.id;
           const bestScore = item.globalBest?.score || item.rounds?.[item.rounds.length - 1]?.bestPush?.score;
           return `
-            <button class="history-item ${isActive ? 'active' : ''}" onclick="applySnapshot(state.history.find(h => h.id === '${item.id}'))">
+            <button class="history-item ${isActive ? 'active' : ''}" onclick="loadSnapshotForViewing('${item.id}')">
               <span class="history-round">${item.source === 'live' ? 'Live' : 'Demo'} Loop ${item.currentRound || item.rounds?.length || 0} rounds</span>
               <span class="history-score">${bestScore ? bestScore.toFixed(2) : 'N/A'}</span>
               <span class="history-time">${timeStr}</span>
             </button>
           `;
         }).join("");
+      }
+
+      function viewHistory() {
+        state.isViewingHistory = true;
+        state.viewingSnapshotId = null;
+        renderHistory();
+        renderEvolutionBoard();
+        $("view-history-btn").textContent = "Back to Current";
+        log("[System] Viewing history", "");
+      }
+
+      function exitHistoryView() {
+        state.isViewingHistory = false;
+        state.viewingSnapshotId = null;
+        renderHistory();
+        renderEvolutionBoard();
+        $("view-history-btn").textContent = "View History";
+        log("[System] Exited history view", "");
+      }
+
+      function loadSnapshotForViewing(snapshotId) {
+        const snapshot = state.history.find(h => h.id === snapshotId);
+        if (!snapshot) return;
+
+        state.viewingSnapshotId = snapshotId;
+        state.rounds = deepClone(snapshot.rounds || []);
+        state.currentRound = snapshot.currentRound || 0;
+        state.globalBest = deepClone(snapshot.globalBest);
+        state.basePrompt = snapshot.input?.basePrompt || '';
+        state.strategy = snapshot.input?.strategy || '';
+        state.params = deepClone(snapshot.input?.params || {});
+        state.runtime.model = snapshot.runtime?.model || state.runtime.model;
+        state.runtime.endpoint = snapshot.runtime?.endpoint || state.runtime.endpoint;
+
+        $("base-prompt").value = state.basePrompt;
+        $("strategy").value = state.strategy;
+        autoResizeTextarea($("base-prompt"));
+        autoResizeTextarea($("strategy"));
+        renderParamFields();
+        renderHistory();
+        renderEvolutionBoard();
+        log(`[System] Viewing saved loop from ${new Date(snapshot.createdAt).toLocaleString()}`, "");
       }
 
       function restoreRound(roundNum) {
@@ -1907,39 +2128,41 @@ Requirements:
       }
 
       function renderEvolutionBoard() {
-        if (!state.rounds.length) {
+        if (!state.rounds.length && !state.isViewingHistory) {
           $("evolution-board").innerHTML = '<div class="empty">No runs yet. Click "Run Next Round" on the left to start.</div>';
           return;
         }
 
-        const isViewingHistory = state.activeHistoryId !== null;
-        const roundsToShow = isViewingHistory ? state.rounds : [state.rounds[state.rounds.length - 1]];
+        const roundsToShow = state.isViewingHistory ? state.rounds : [state.rounds[state.rounds.length - 1]];
 
         let html = '<div class="round-list">';
 
-        if (isViewingHistory) {
+        if (state.isViewingHistory) {
           html += `
             <div class="round-section" style="border: 2px solid var(--accent); margin-bottom: 16px;">
               <div class="round-section-header" style="background: var(--accent-light);">
-                <span class="round-title" style="color: var(--accent);">Viewing History Snapshot</span>
-                <button class="optimize-btn" style="background: var(--accent); color: #fff; border-color: var(--accent);" onclick="returnToCurrent()">Return to Current</button>
+                <span class="round-title" style="color: var(--accent);">Viewing History</span>
+                <button class="optimize-btn" style="background: var(--accent); color: #fff; border-color: var(--accent);" onclick="exitHistoryView()">Back</button>
               </div>
             </div>
           `;
         }
 
-        roundsToShow.forEach((displayRound) => {
+        roundsToShow.forEach((displayRound, roundIndex) => {
+          const isCurrentRound = roundIndex === roundsToShow.length - 1 && !state.isViewingHistory;
           html += `<div class="round-section">`;
           html += `<div class="round-section-header">`;
-          html += `<span class="round-title">Round ${displayRound.roundNum}${state.viewingRoundNum ? ' (viewing)' : ''}</span>`;
+          html += `<span class="round-title">Round ${displayRound.roundNum}${isCurrentRound ? ' (Current)' : ''}</span>`;
           html += `<span class="round-best">Best: ${displayRound.bestPush?.score?.toFixed(2) || 'N/A'}</span>`;
+          if (state.isViewingHistory) {
+            html += `<button class="optimize-btn" style="background:var(--success);color:#fff;border-color:var(--success);" onclick="restoreRoundFromHistory(${displayRound.roundNum})">Restore to this Round</button>`;
+          }
           html += `</div>`;
 
         displayRound.prompts.forEach((prompt, pi) => {
           const isTop = displayRound.topKPrompts && displayRound.topKPrompts.some(p => p.id === prompt.id);
           const isBest = prompt.id === (displayRound.bestPrompt?.id || displayRound.bestPrompt?.bestPush?.id || null);
           const isExpanded = true;
-          const isPending = displayRound.pendingSelection;
           const bestPush = prompt.pushes?.[0];
 
           html += `
@@ -1949,7 +2172,7 @@ Requirements:
                 <span class="prompt-tree-name">Prompt #${pi + 1}</span>
                 <span class="prompt-tree-score">${bestPush?.score?.toFixed(2) || 'N/A'}</span>
                 <button class="optimize-btn" onclick="event.stopPropagation(); showPromptContent(${pi})" style="margin-left:auto;margin-right:4px;">View Full</button>
-                <button class="optimize-btn" style="background:#d73a49;color:#fff;border-color:#d73a49;" onclick="event.stopPropagation(); selectPush(${pi}, '${bestPush?.id}')">Best</button>
+                ${!state.isViewingHistory ? `<button class="optimize-btn" style="background:#d73a49;color:#fff;border-color:#d73a49;" onclick="event.stopPropagation(); selectPush(${pi}, '${bestPush?.id}')">Best</button>` : ''}
               </div>
               <div class="prompt-tree-content" style="display: ${isExpanded ? 'block' : 'none'}">
                 ${bestPush ? `
@@ -1995,6 +2218,27 @@ Requirements:
         html += '</div>';
 
         $("evolution-board").innerHTML = html;
+      }
+
+      function restoreRoundFromHistory(roundNum) {
+        const round = state.rounds.find(r => r.roundNum === roundNum);
+        if (!round || !round.bestPrompt) return;
+
+        state.basePrompt = round.bestPrompt.text;
+        state.viewingRoundNum = roundNum;
+        state.isViewingHistory = false;
+        state.viewingSnapshotId = null;
+
+        $("base-prompt").value = state.basePrompt;
+        autoResizeTextarea($("base-prompt"));
+        renderParamFields();
+        renderEvolutionBoard();
+        renderHistory();
+        $("view-history-btn").textContent = "View History";
+        saveState();
+
+        log(`[System] Restored to Round ${roundNum}: "${round.bestPrompt.text.slice(0, 40)}..."`, "");
+        $("status").textContent = `Restored to Round ${roundNum}`;
       }
 
       function returnToCurrent() {
@@ -2115,8 +2359,21 @@ Requirements:
       // Event Listeners
       $("run-round-btn").addEventListener("click", runNextRound);
       $("reset-btn").addEventListener("click", resetAll);
-      $("save-history-btn").addEventListener("click", saveCurrentLoop);
-      $("clear-history-btn").addEventListener("click", clearHistory);
+      $("view-history-btn").addEventListener("click", () => {
+        if (state.isViewingHistory) {
+          exitHistoryView();
+        } else {
+          viewHistory();
+        }
+      });
+      $("export-btn").addEventListener("click", exportToExcel);
+      $("import-btn").addEventListener("click", () => $("import-file").click());
+      $("import-file").addEventListener("change", e => {
+        if (e.target.files[0]) {
+          importFromExcel(e.target.files[0]);
+          e.target.value = '';
+        }
+      });
 
       function autoResizeTextarea(el) {
         el.style.height = 'auto';
