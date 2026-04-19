@@ -29,6 +29,7 @@
         const CELL_SIZE = 150;
         const GRID_COLS = 10;
         const GRID_ROWS = 10;
+        const STORAGE_KEY = 'pope_batch_template_v1';
         
         const TEMPLATES = {
             'Background': { pinned: true, fields: [
@@ -664,13 +665,32 @@
             };
             
             useEffect(() => {
-                setNodes([
-                    { id: 'bg', nodeName: 'Background', gridX: 0, gridY: -2, pinned: true, fields: TEMPLATES['Background'].fields.map(f => ({...f})) },
-                    { id: 'evt', nodeName: 'Event basic info', gridX: 1, gridY: -2, pinned: true, fields: TEMPLATES['Event basic info'].fields.map(f => ({...f})) },
-                    { id: 'tg', nodeName: 'Target Group', gridX: 0, gridY: 0, fields: TEMPLATES['Target Group'].fields.map(f => ({...f})), isTargetGroup: true }
-                ]);
+                try {
+                    const saved = localStorage.getItem(STORAGE_KEY);
+                    if (saved) {
+                        setNodes(JSON.parse(saved));
+                    } else {
+                        setNodes([
+                            { id: 'bg', nodeName: 'Background', gridX: 0, gridY: -2, pinned: true, fields: TEMPLATES['Background'].fields.map(f => ({...f})) },
+                            { id: 'evt', nodeName: 'Event basic info', gridX: 1, gridY: -2, pinned: true, fields: TEMPLATES['Event basic info'].fields.map(f => ({...f})) },
+                            { id: 'tg', nodeName: 'Target Group', gridX: 0, gridY: 0, fields: TEMPLATES['Target Group'].fields.map(f => ({...f})), isTargetGroup: true }
+                        ]);
+                    }
+                } catch {
+                    setNodes([
+                        { id: 'bg', nodeName: 'Background', gridX: 0, gridY: -2, pinned: true, fields: TEMPLATES['Background'].fields.map(f => ({...f})) },
+                        { id: 'evt', nodeName: 'Event basic info', gridX: 1, gridY: -2, pinned: true, fields: TEMPLATES['Event basic info'].fields.map(f => ({...f})) },
+                        { id: 'tg', nodeName: 'Target Group', gridX: 0, gridY: 0, fields: TEMPLATES['Target Group'].fields.map(f => ({...f})), isTargetGroup: true }
+                    ]);
+                }
             }, []);
-            
+
+            useEffect(() => {
+                if (nodes.length > 0) {
+                    localStorage.setItem(STORAGE_KEY, JSON.stringify(nodes));
+                }
+            }, [nodes]);
+
             useEffect(() => {
                 const handleWindowMouseMove = (e) => {
                     if (!dragState || !mainRef.current) return;
