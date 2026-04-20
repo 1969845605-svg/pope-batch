@@ -4,6 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>AI Push Optimization Workbench</title>
+    <script>window.ENV = { api: "" };</script>
     <style>
       :root {
         --bg: #f5f7fb;
@@ -1218,7 +1219,6 @@
 
           <div class="field">
             <label>API Settings</label>
-            <input type="password" id="api-key" placeholder="Enter API Key..." style="margin-bottom:8px;" />
             <select id="model-select" style="width:100%;padding:6px 8px;font-size:11px;border:1px solid var(--line);border-radius:4px;margin-bottom:8px;">
               <option value="MiniMax-M2.5-highspeed">MiniMax-M2.5-highspeed</option>
               <option value="MiniMax-M2.7-highspeed">MiniMax-M2.7-highspeed</option>
@@ -1297,7 +1297,7 @@
           { name: "Compliance", value: 0.25 }
         ],
         runtime: {
-          apiKey: "",
+          apiKey: window.ENV?.api || "",
           model: "MiniMax-M2.5-highspeed",
           endpoint: "https://api.minimaxi.com/v1/text/chatcompletion_v2"
         },
@@ -1615,7 +1615,6 @@
 
         $("base-prompt").value = state.basePrompt;
         $("strategy").value = state.strategy;
-        $("api-key").value = state.runtime.apiKey;
         $("model-select").value = state.runtime.model;
         $("api-endpoint").value = state.runtime.endpoint;
         autoResizeTextarea($("base-prompt"));
@@ -2048,7 +2047,6 @@ Requirements:
 
         $("base-prompt").value = '';
         $("strategy").value = '';
-        $("api-key").value = '';
         autoResizeTextarea($("base-prompt"));
         autoResizeTextarea($("strategy"));
         renderParamFields();
@@ -2380,7 +2378,6 @@ Requirements:
         input.addEventListener("input", updateWeightSum);
       });
 
-      $("api-key").addEventListener("input", e => { state.runtime.apiKey = e.target.value; });
       $("model-select").addEventListener("change", e => { state.runtime.model = e.target.value; });
       $("api-endpoint").addEventListener("input", e => { state.runtime.endpoint = e.target.value; });
 
