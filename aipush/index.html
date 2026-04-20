@@ -1630,22 +1630,18 @@ runtime: {
       }
 
       async function callMiniMax(systemPrompt, userPrompt) {
-        const apiKey = state.runtime.apiKey;
-        if (!apiKey) {
-          throw new Error("API Key is missing. Please check Vercel environment variable 'api_minimax_key' is configured correctly.");
-        }
-        const response = await fetch(state.runtime.endpoint, {
+        const response = await fetch("/api/chat", {
           method: "POST",
           headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${apiKey}`
+            "Content-Type": "application/json"
           },
           body: JSON.stringify({
-            model: state.runtime.model,
             messages: [
               { role: "system", content: systemPrompt },
               { role: "user", content: userPrompt }
-            ]
+            ],
+            model: state.runtime.model,
+            endpoint: state.runtime.endpoint
           })
         });
         const raw = await response.text();
