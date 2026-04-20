@@ -1628,18 +1628,18 @@ runtime: {
       }
 
       async function callMiniMax(systemPrompt, userPrompt) {
-        const response = await fetch("/api/chat", {
+        const response = await fetch(state.runtime.endpoint, {
           method: "POST",
           headers: {
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${state.runtime.apiKey}`
           },
           body: JSON.stringify({
+            model: state.runtime.model,
             messages: [
               { role: "system", content: systemPrompt },
               { role: "user", content: userPrompt }
-            ],
-            model: state.runtime.model,
-            endpoint: state.runtime.endpoint
+            ]
           })
         });
         const raw = await response.text();
