@@ -4,6 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>AI Push Optimization Workbench</title>
+    <script src="/api/env.js"></script>
     <script>window.ENV = window.ENV || {};</script>
     <style>
       :root {
@@ -1296,8 +1297,8 @@
           { name: "CTR", value: 0.25 },
           { name: "Compliance", value: 0.25 }
         ],
-        runtime: {
-          apiKey: window.ENV?.api || "",
+runtime: {
+          apiKey: window.ENV?.api_minimax_key || "",
           model: "MiniMax-M2.5-highspeed",
           endpoint: "https://api.minimaxi.com/v1/text/chatcompletion_v2"
         },
@@ -1629,9 +1630,9 @@
       }
 
       async function callMiniMax(systemPrompt, userPrompt) {
-        const apiKey = process.env.api_minimax_key;
+        const apiKey = state.runtime.apiKey;
         if (!apiKey) {
-          throw new Error("API Key is missing. Please check Vercel environment variable 'api' is configured correctly.");
+          throw new Error("API Key is missing. Please check Vercel environment variable 'api_minimax_key' is configured correctly.");
         }
         const response = await fetch(state.runtime.endpoint, {
           method: "POST",
