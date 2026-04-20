@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>AI Push Optimization Workbench</title>
-    <script>window.ENV = { api: "" };</script>
+    <script>window.ENV = window.ENV || {};</script>
     <style>
       :root {
         --bg: #f5f7fb;
@@ -1629,11 +1629,15 @@
       }
 
       async function callMiniMax(systemPrompt, userPrompt) {
+        const apiKey = window.ENV?.api;
+        if (!apiKey) {
+          throw new Error("API Key is missing. Please check Vercel environment variable 'api' is configured correctly.");
+        }
         const response = await fetch(state.runtime.endpoint, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${state.runtime.apiKey}`
+            Authorization: `Bearer ${apiKey}`
           },
           body: JSON.stringify({
             model: state.runtime.model,
@@ -1645,6 +1649,7 @@
         });
         const raw = await response.text();
         if (!response.ok) throw new Error(`HTTP ${response.status}: ${raw}`);
+        if (!raw.trim()) throw new Error("Empty API response");
         const data = JSON.parse(raw);
         return data.choices?.[0]?.message?.content || "";
       }
