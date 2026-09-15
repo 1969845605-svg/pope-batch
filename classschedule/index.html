@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Class Schedule · 2026 Fall</title>
+<style>
+  :root{
+    --line:#e6e7ea;
+    --outer:#dfe1e6;
+    --ink:#22262e;
+    --gray:#8b909a;
+    --row:84px;         /* 每节课高度 */
+    --timecol:150px;    /* 时间列宽度 */
+    --sheet-w:1500px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background:#ffffff;
+    color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",Roboto,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased;
+    padding:26px 22px 40px;
+  }
+  .sheet{
+    max-width:var(--sheet-w);
+    margin:0 auto;
+    border:1px solid var(--outer);
+    overflow-x:auto;
+    overscroll-behavior-x:contain;
+  }
+  .grid{
+    display:grid;
+    grid-template-columns:var(--timecol) repeat(8,minmax(134px,1fr));
+    min-width:1340px;
+  }
+
+  /* ---------- 表头 ---------- */
+  .day-head{
+    grid-row:1;
+    display:flex;align-items:center;justify-content:center;
+    height:58px;
+    font-size:13px;color:#6f747e;letter-spacing:.02em;
+    border-right:1px solid var(--line);
+    border-bottom:1px solid var(--outer);
+  }
+  .day-head:last-of-type{border-right:0}
+  .corner{
+    display:flex;align-items:center;justify-content:center;
+    height:58px;
+    font-size:12px;color:#9aa0aa;letter-spacing:.08em;
+    border-right:1px solid var(--line);
+    border-bottom:1px solid var(--outer);
+  }
+
+  /* ---------- 时间列 ---------- */
+  .time{
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;
+    height:var(--row);
+    border-right:1px solid var(--line);
+    border-bottom:1px solid var(--line);
+    text-align:center;
+  }
+  .time b{font-size:12.5px;font-weight:600;color:#3d434e}
+  .time span{font-size:11px;color:var(--gray);font-variant-numeric:tabular-nums;letter-spacing:.02em}
+
+  /* ---------- 每天一列（按需分多条泳道） ---------- */
+  .slot{
+    height:var(--row);
+    border-right:1px solid var(--line);
+    border-bottom:1px solid var(--line);
+  }
+  .day-end{border-right:1px solid var(--line)}
+  .last-row{border-bottom:1px solid var(--line)}
+
+  /* ---------- 课程卡 ---------- */
+  .card{
+    margin:5px 6px;
+    border-radius:7px;
+    border-left-width:6px;
+    border-left-style:solid;
+    padding:8px 10px 8px 9px;
+    overflow:hidden;
+    display:flex;flex-direction:column;gap:2px;
+    font-size:11px;line-height:1.5;
+  }
+  .card .t{font-size:12px;font-weight:600;line-height:1.35;letter-spacing:-.01em}
+  .card .m{color:#5d6270}
+  .card .m:first-of-type{margin-top:1px}
+
+  /* 英文课（原 PDF 配色） */
+  .k-cream{background:#FFF5DE;border-left-color:#F5B018;color:#5b4a1d}
+  .k-cream .t{color:#3f3210}
+  .k-cream .m{color:#8a7745}
+  .k-blue{background:#E3EDFF;border-left-color:#75A2E2;color:#2c3f63}
+  .k-blue .t{color:#1f3053}
+  .k-blue .m{color:#63769b}
+
+  /* 中文课（沿用截图原配色） */
+  .k-rose{background:#FDEAEA;border-left-color:#E0807D;color:#7c2b28}
+  .k-green{background:#EAFAE4;border-left-color:#58B846;color:#25591c}
+  .k-yellow{background:#FBFBDD;border-left-color:#C9C94A;color:#5c5c14}
+  .k-mint{background:#E8FCF3;border-left-color:#2FB98A;color:#0f5940}
+  .k-cyan{background:#E9F7FB;border-left-color:#37A2C8;color:#144f63}
+  .k-steel{background:#E7F1F8;border-left-color:#5C8FBB;color:#1b3f6b}
+  .k-violet{background:#F3ECFD;border-left-color:#8B5CC9;color:#43206b}
+  .k-rose .m,.k-green .m,.k-yellow .m,.k-mint .m,.k-cyan .m,.k-steel .m,.k-violet .m{color:inherit;opacity:.72}
+
+  @media (max-width:820px){
+    :root{--row:78px;--timecol:112px}
+    body{padding:14px 10px 30px}
+    .grid{min-width:1000px}
+    .card{font-size:10.5px;padding:6px 8px 6px 7px}
+    .card .t{font-size:11px}
+  }
+</style>
+</head>
+<body>
+<div class="sheet"><div class="grid" id="grid"></div></div>
+
+<script>
+/* 节次（沿用 PDF 的英文标注） */
+const PERIODS = [
+  {n:'First Period',    t:'8:00-8:50'},
+  {n:'Second Period',   t:'9:00-9:50'},
+  {n:'Third Period',    t:'10:10-11:00'},
+  {n:'Fourth Period',   t:'11:10-12:00'},
+  {n:'Fifth Period',    t:'13:00-13:50'},
+  {n:'Sixth Period',    t:'14:00-14:50'},
+  {n:'Seventh Period',  t:'15:10-16:00'},
+  {n:'Eighth Period',   t:'16:10-17:00'},
+  {n:'Ninth Period',    t:'17:10-18:00'},
+  {n:'Tenth Period',    t:'18:40-19:30'},
+  {n:'Eleventh Period', t:'19:40-20:30'},
+  {n:'Twelfth Period',  t:'20:40-21:30'}
+];
+const SPECIAL = {n:'Special Period', t:'19:00-22:30'};
+const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
+
+/* day: 0=Monday；start: 起始节次(1-12)；span: 连续节数 */
+const COURSES = [
+  /* ===== 原 PDF 课程 ===== */
+  {lines:['Economic Demography: A Chinese Perspective','（Week 1-12）','Prof. 周羿','Room 101, JINGYUAN4','19:00-21:30'],
+   day:1, start:10, span:3, k:'k-blue'},
+  {lines:['Theory and Practice of Chinese Foreign Policy','（Week 1-12）','Prof. 张清敏','Room 107, JINGYUAN4','9:00-12:00'],
+   day:2, start:2, span:3, k:'k-blue'},
+  {lines:['China in Transition (for All Students)','14:00-17:00'],
+   day:2, start:6, span:3, k:'k-cream'},
+  {lines:['Topics in China Studies Lecture Series (for All Students)','18:40-20:30'],
+   day:2, start:10, span:2, k:'k-cream'},
+  {lines:['Academic Writing (for All Students)','18:40-20:30'],
+   day:2, start:10, span:2, k:'k-cream'},
+
+  /* ===== 截图中的课程（补入） ===== */
+  {lines:['拉美地区研究','（国关 C108）'],
+   day:0, start:10, span:3, k:'k-rose'},
+  {lines:['高级国际金融专题','（二教 318）'],
+   day:3, start:1, span:2, k:'k-green'},
+  {lines:['经济改革与发展专题','（理教 203）'],
+   day:3, start:3, span:2, k:'k-yellow'},
+  {lines:['自然辩证法概论','（理教 208）'],
+   day:3, start:5, span:2, k:'k-mint'},
+  {lines:['中国式现代化的理论与实践','（二教 101）','（备注：校本部）双周'],
+   day:4, start:5, span:4, k:'k-cyan'},
+  {lines:['价值投资','9:00-12:00'],
+   day:4, start:2, span:3, k:'k-violet'},
+  {lines:['名家专题讲座（二）','（三教 508）','（备注：本研合上，亚投行）每周'],
+   day:4, start:10, span:2, k:'k-steel'}
+];
+
+/* 每天需要几条泳道 = 该天同时段最多课程数 */
+function laneCount(list){
+  let max = 0;
+  for (let p = 1; p <= 12; p++){
+    const n = list.filter(c => c.start <= p && p < c.start + c.span).length;
+    if (n > max) max = n;
+  }
+  return Math.max(max, 1);
+}
+/* 逐门分配泳道：与已排课程不重叠的最小编号 */
+function assignLanes(list){
+  const ordered = [...list].sort((a,b)=> a.start - b.start || b.span - a.span);
+  const placed = [];
+  ordered.forEach(c=>{
+    const busy = new Set(
+      placed.filter(x => c.start < x.start + x.span && x.start < c.start + c.span).map(x=>x.lane)
+    );
+    let lane = 0;
+    while (busy.has(lane)) lane++;
+    c.lane = lane;
+    placed.push(c);
+  });
+}
+
+const grid = document.getElementById('grid');
+
+/* 泳道布局 */
+const lanes = DAYS.map((d,i)=> laneCount(COURSES.filter(c=>c.day===i)));
+const colOf = [];
+let col = 2;
+DAYS.forEach((d,i)=>{
+  colOf[i] = col;
+  col += lanes[i];
+});
+const TOTAL_COLS = col - 1;
+
+/* 表头 */
+const corner = document.createElement('div');
+corner.className = 'corner';
+corner.textContent = 'BEIJING TIME';
+corner.style.gridColumn = 1;
+corner.style.gridRow = 1;
+grid.appendChild(corner);
+
+DAYS.forEach((d,i)=>{
+  const el = document.createElement('div');
+  el.className = 'day-head';
+  el.textContent = d;
+  el.style.gridColumn = colOf[i] + ' / span ' + lanes[i];
+  el.style.gridRow = 1;
+  grid.appendChild(el);
+});
+
+/* 一行 = 时间格 + 各天泳道格 */
+function addRow(rowIndex, label, timeText){
+  const t = document.createElement('div');
+  t.className = 'time';
+  t.style.gridColumn = 1;
+  t.style.gridRow = rowIndex;
+  t.innerHTML = `<b>${label}</b><span>${timeText}</span>`;
+  grid.appendChild(t);
+
+  DAYS.forEach((d,i)=>{
+    for (let l = 0; l < lanes[i]; l++){
+      const s = document.createElement('div');
+      s.className = 'slot' + (colOf[i] + l === TOTAL_COLS ? ' day-end' : '') +
+                    (rowIndex === 14 ? ' last-row' : '');
+      s.style.gridColumn = colOf[i] + l;
+      s.style.gridRow = rowIndex;
+      grid.appendChild(s);
+    }
+  });
+}
+PERIODS.forEach((p,i)=> addRow(i + 2, p.n, p.t));
+addRow(14, SPECIAL.n, SPECIAL.t);
+
+/* 课程卡 */
+DAYS.forEach((d,i)=>{
+  const list = COURSES.filter(c=>c.day===i);
+  assignLanes(list);
+  list.forEach(c=>{
+    const el = document.createElement('div');
+    el.className = 'card ' + c.k;
+    el.style.gridColumn = colOf[i] + c.lane;
+    el.style.gridRow = (c.start + 1) + ' / span ' + c.span;
+    el.innerHTML =
+      `<div class="t">${c.lines[0]}</div>` +
+      c.lines.slice(1).map(x => `<div class="m">${x}</div>`).join('');
+    grid.appendChild(el);
+  });
+});
+</script>
+</body>
+</html>
